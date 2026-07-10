@@ -9,10 +9,16 @@
 直接用瀏覽器開啟：
 
 ```text
-voyager_gravity_assist_mission_zh.html
+index.html
 ```
 
 不需要安裝套件、不需要後端伺服器，也不需要網路連線。
+
+線上版本可透過 GitHub Pages 開啟：
+
+```text
+https://chichingleetw.github.io/gravity-slingshot-voyager-game/
+```
 
 ## 操作方法
 
@@ -107,7 +113,7 @@ voyager_gravity_assist_mission_zh.html
 
 ## 專案檔案
 
-- `voyager_gravity_assist_mission_zh.html`：完整遊戲，包含 HTML、CSS 與 JavaScript。
+- `index.html`：完整遊戲，包含 HTML、CSS 與 JavaScript，也是 GitHub Pages 的首頁。
 - `README.md`：專案說明、遊戲操作、科普背景與任務資料。
 
 ## 授權
