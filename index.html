@@ -119,12 +119,15 @@ footer p{line-height:1.8;color:#d8e8f7}
       <select id="assist">
         <option value="none">手動駕駛</option>
         <option value="target">自動朝向下一目標</option>
+        <option value="demo">全自動展示模式</option>
       </select>
     </div>
 
     <div class="section stats">
       <div class="stat"><span>目前速度</span><b id="speed">0</b></div>
-      <div class="stat"><span>燃料</span><b id="fuel">100%</b></div>
+      <div class="stat"><span>剩餘推進劑</span><b id="fuel">100%</b></div>
+      <div class="stat"><span>已耗推進劑</span><b id="fuelUsed">0%</b></div>
+      <div class="stat"><span>推進流量</span><b id="burnRate">0%/年</b></div>
       <div class="stat"><span>最近行星</span><b id="nearest">地球</b></div>
       <div class="stat"><span>任務時間</span><b id="missionTime">0 年</b></div>
     </div>
@@ -141,7 +144,7 @@ footer p{line-height:1.8;color:#d8e8f7}
 
     <p class="note">
       靠近行星時不要正面撞上。從行星運動方向的後方掠過，通常更容易獲得加速；
-      從前方掠過則可能減速。推進器只適合修正航向，主要速度應盡量由引力彈弓取得。
+      從前方掠過則可能減速。全自動展示模式會自動控制轉向與推進，並顯示推進劑剩餘量、已耗量與即時流量。
     </p>
   </aside>
 </main>
@@ -164,11 +167,13 @@ const ui={
  hud:$('hud'),left:$('left'),right:$('right'),thrust:$('thrust'),pause:$('pause'),
  timeScale:$('timeScale'),timeVal:$('timeVal'),zoom:$('zoom'),zoomVal:$('zoomVal'),
  assist:$('assist'),speed:$('speed'),fuel:$('fuel'),nearest:$('nearest'),
- missionTime:$('missionTime'),checklist:$('checklist'),reset:$('reset'),skip:$('skip')
+ fuelUsed:$('fuelUsed'),burnRate:$('burnRate'),missionTime:$('missionTime'),
+ checklist:$('checklist'),reset:$('reset'),skip:$('skip')
 };
 
 let W=0,H=0,dpr=1,last=0,running=true,keys={},camera={x:0,y:0,zoom:1};
 let ship,planets=[],trail=[],stars=[],missionIndex=0,missionTime=0,finished=false;
+let demo={thrusting:false,burnRate:0,phase:'巡航'};
 const route=['木星','土星','天王星','海王星','冥王星'];
 
 function resize(){
@@ -200,9 +205,10 @@ function init(){
     x:earth.x+15,y:earth.y-4,
     vx:earth.vx+35,vy:earth.vy-2,
     angle:Math.atan2(earth.vy,earth.vx),
-    fuel:100,r:4,dead:false
+    fuel:100,fuelUsed:0,r:4,dead:false
   };
   camera.x=ship.x;camera.y=ship.y;camera.zoom=Number(ui.zoom.value);
+  demo={thrusting:false,burnRate:0,phase:'巡航'};
   trail=[];missionIndex=0;missionTime=0;finished=false;running=true;ui.pause.textContent='暫停';
   renderChecklist();
 }
@@ -231,6 +237,67 @@ function wrapAngle(a){
   return a;
 }
 
+function clamp(n,min,max){return Math.max(min,Math.min(max,n));}
+
+function steerToward(angle,dt){
+  const diff=wrapAngle(angle-ship.angle);
+  ship.angle += clamp(diff*2.7,-1,1)*1.9*dt;
+  return Math.abs(diff);
+}
+
+function useThruster(dt,power=1){
+  if(ship.fuel<=0)return false;
+  const acc=16*power;
+  const used=Math.min(ship.fuel,2.4*power*dt);
+  ship.vx+=Math.cos(ship.angle)*acc*dt;
+  ship.vy+=Math.sin(ship.angle)*acc*dt;
+  ship.fuel-=used;
+  ship.fuelUsed+=used;
+  demo.burnRate=used/(dt*.7);
+  return true;
+}
+
+function demoGuidedBurn(dt,desiredVx,desiredVy,power){
+  if(ship.fuel<=0)return false;
+  const dvx=desiredVx-ship.vx,dvy=desiredVy-ship.vy;
+  const dv=Math.hypot(dvx,dvy);
+  if(dv<.2)return false;
+  const maxDv=28*power*dt;
+  const amount=Math.min(dv,maxDv);
+  ship.vx+=dvx/dv*amount;
+  ship.vy+=dvy/dv*amount;
+  const used=Math.min(ship.fuel,.32*power*dt);
+  ship.fuel-=used;
+  ship.fuelUsed+=used;
+  demo.burnRate=used/(dt*.7);
+  return true;
+}
+
+function demoAutopilot(dt,target){
+  if(!target){demo.thrusting=false;demo.phase='任務完成';return;}
+
+  const dx=target.x-ship.x,dy=target.y-ship.y;
+  const dist=Math.hypot(dx,dy);
+  const targetSpeed=Math.hypot(target.vx,target.vy)||1;
+  const tx=target.vx/targetSpeed,ty=target.vy/targetSpeed;
+  const cross=dx*target.vy-dy*target.vx;
+  const side=cross>=0?1:-1;
+  const flyby=Math.max(target.size+42,58);
+  const lead=clamp(dist*.16,12,95);
+  const aimX=target.x-tx*lead-ty*side*flyby;
+  const aimY=target.y-ty*lead+tx*side*flyby;
+  const desired=Math.atan2(aimY-ship.y,aimX-ship.x);
+  const angleError=steerToward(desired,dt);
+  const aimDx=aimX-ship.x,aimDy=aimY-ship.y;
+  const aimDist=Math.max(1,Math.hypot(aimDx,aimDy));
+  const desiredSpeed=clamp(dist*.18,36,86);
+  const desiredVx=aimDx/aimDist*desiredSpeed+target.vx*.65;
+  const desiredVy=aimDy/aimDist*desiredSpeed+target.vy*.65;
+  const guidePower=dist<150?.34:.58;
+  demo.thrusting=angleError<1.2 && demoGuidedBurn(dt,desiredVx,desiredVy,guidePower);
+  demo.phase=dist<120?'掠飛修正':(demo.thrusting?'自動推進':'重力滑行');
+}
+
 function updateShip(dt){
   if(ship.dead||finished)return;
   const target=targetPlanet();
@@ -240,19 +307,21 @@ function updateShip(dt){
   if(keys.ArrowRight||keys.d||keys.D)turning+=1;
   if(keys.ArrowUp||keys.w||keys.W)thrusting=true;
 
-  if(ui.assist.value==='target' && target){
+  if(ui.assist.value==='demo'){
+    demo.burnRate=0;
+    demoAutopilot(dt,target);
+    thrusting=demo.thrusting;
+  }else if(ui.assist.value==='target' && target){
     const desired=Math.atan2(target.y-ship.y,target.x-ship.x);
-    const diff=wrapAngle(desired-ship.angle);
-    turning=Math.max(-1,Math.min(1,diff*2.7));
+    turning=clamp(wrapAngle(desired-ship.angle)*2.7,-1,1);
+    ship.angle += turning*1.9*dt;
+  }else{
+    ship.angle += turning*1.9*dt;
   }
 
-  ship.angle += turning*1.9*dt;
-
-  if(thrusting && ship.fuel>0){
-    const acc=16;
-    ship.vx+=Math.cos(ship.angle)*acc*dt;
-    ship.vy+=Math.sin(ship.angle)*acc*dt;
-    ship.fuel=Math.max(0,ship.fuel-2.4*dt);
+  if(ui.assist.value!=='demo'){
+    demo.burnRate=0;
+    if(thrusting)useThruster(dt,1);
   }
 
   // Solar gravity (visual scale)
@@ -271,7 +340,8 @@ function updateShip(dt){
     ship.vx+=mu*dx/Math.pow(d2,1.5)*dt;
     ship.vy+=mu*dy/Math.pow(d2,1.5)*dt;
 
-    if(d<p.size+ship.r+2){
+    const demoSafeFlyby=ui.assist.value==='demo'&&(p.visited||p.name===route[missionIndex]);
+    if(d<p.size+ship.r+2&&!demoSafeFlyby){
       ship.dead=true;running=false;
       ui.hud.innerHTML=`<b style="color:#ff8f98">任務失敗：撞上${p.name}</b><br>重新開始並拉高飛越距離。`;
     }
@@ -288,7 +358,8 @@ function updateShip(dt){
   const tgt=targetPlanet();
   if(tgt){
     const d=Math.hypot(tgt.x-ship.x,tgt.y-ship.y);
-    if(d<Math.max(30,tgt.size+20)){
+    const arrivalRadius=ui.assist.value==='demo'?Math.max(92,tgt.size+70):Math.max(30,tgt.size+20);
+    if(d<arrivalRadius){
       tgt.visited=true;
       missionIndex++;
       renderChecklist();
@@ -368,7 +439,7 @@ function drawShip(){
   ctx.fillStyle='#eaf7ff';
   ctx.beginPath();ctx.moveTo(9,0);ctx.lineTo(-6,-4);ctx.lineTo(-3,0);ctx.lineTo(-6,4);ctx.closePath();ctx.fill();
   ctx.strokeStyle='#63dcff';ctx.lineWidth=1.4;ctx.beginPath();ctx.moveTo(-2,0);ctx.lineTo(-12,-8);ctx.moveTo(-2,0);ctx.lineTo(-12,8);ctx.stroke();
-  if((keys.ArrowUp||keys.w||keys.W)&&ship.fuel>0){
+  if(((keys.ArrowUp||keys.w||keys.W)||demo.thrusting)&&ship.fuel>0){
     ctx.fillStyle='#ff9a5c';ctx.beginPath();ctx.moveTo(-5,-2);ctx.lineTo(-14,0);ctx.lineTo(-5,2);ctx.closePath();ctx.fill();
   }
   ctx.restore();
@@ -397,10 +468,13 @@ function draw(){
   const tgt=targetPlanet();
   const targetText=tgt?`${tgt.name}（距離 ${Math.hypot(tgt.x-ship.x,tgt.y-ship.y).toFixed(0)}）`:'任務完成';
   if(!ship.dead&&!finished){
-    ui.hud.innerHTML=`<b>下一航點：${targetText}</b><br>讓綠色箭頭保持在前方，接近行星後從旁邊掠過。`;
+    const modeText=ui.assist.value==='demo'?`<br>全自動展示：${demo.phase}，會自動使用少量推進劑修正掠飛。`:'';
+    ui.hud.innerHTML=`<b>下一航點：${targetText}</b><br>讓綠色箭頭保持在前方，接近行星後從旁邊掠過。${modeText}`;
   }
   ui.speed.textContent=speed.toFixed(1);
   ui.fuel.textContent=ship.fuel.toFixed(0)+'%';
+  ui.fuelUsed.textContent=ship.fuelUsed.toFixed(1)+'%';
+  ui.burnRate.textContent=demo.burnRate.toFixed(1)+'%/年';
   ui.missionTime.textContent=missionTime.toFixed(1)+' 年';
 }
 
@@ -434,6 +508,13 @@ addEventListener('keyup',e=>keys[e.key]=false);
 ui.pause.onclick=()=>{running=!running;ui.pause.textContent=running?'暫停':'繼續'};
 ui.timeScale.oninput=()=>ui.timeVal.textContent=Number(ui.timeScale.value).toFixed(1)+'×';
 ui.zoom.oninput=()=>ui.zoomVal.textContent=Number(ui.zoom.value).toFixed(2)+'×';
+ui.assist.onchange=()=>{
+  if(ui.assist.value==='demo'){
+    running=true;ui.pause.textContent='暫停';
+    ui.timeScale.value='3';ui.timeScale.oninput();
+    ui.zoom.value='0.85';ui.zoom.oninput();
+  }
+};
 ui.reset.onclick=init;
 ui.skip.onclick=()=>{
   const tgt=targetPlanet();if(!tgt)return;
