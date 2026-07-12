@@ -17,7 +17,7 @@ index.html
 線上版本可透過 GitHub Pages 開啟：
 
 ```text
-https://chichingleetw.github.io/gravity-slingshot-voyager-game/
+https://educatres.github.io/gravity-slingshot-voyager-game/
 ```
 
 ## 操作方法
